@@ -11,6 +11,7 @@ const { Firstmate } = require('./fm');
 const { buildQueue } = require('./queue');
 const { buildBoard } = require('./board');
 const { AnswerDesk } = require('./answers');
+const { PrChecks } = require('./ci');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const ASSETS = {
@@ -76,10 +77,11 @@ function fail(res, err) {
   send(res, err.status || 502, { error: err.message || String(err) });
 }
 
-function createApp({ fmHome, cacheMs = 3000, runner } = {}) {
+function createApp({ fmHome, cacheMs = 3000, runner, prChecks } = {}) {
   const ports = { queue: null, board: null }; // filled in by the caller once listening
   const fm = new Firstmate(fmHome, { cacheMs, runner });
   const desk = new AnswerDesk(fm);
+  const checks = prChecks || new PrChecks();
   const currentQueue = async () => {
     const snap = await fm.snapshot();
     return { generated: snap.generated, items: buildQueue(snap, (f) => fm.mtime(f)) };
@@ -111,7 +113,7 @@ function createApp({ fmHome, cacheMs = 3000, runner } = {}) {
       if (req.method === 'GET' && url.pathname === '/') return sendPage(res, 'board.html');
       if (common(req, res, url, ports)) return undefined;
       if (req.method === 'GET' && url.pathname === '/api/board') {
-        return send(res, 200, await buildBoard(await fm.snapshot(), fm));
+        return send(res, 200, await buildBoard(await fm.snapshot(), fm, checks));
       }
       return send(res, 404, { error: 'not found' });
     } catch (err) { return fail(res, err); }
@@ -120,6 +122,7 @@ function createApp({ fmHome, cacheMs = 3000, runner } = {}) {
   return {
     fm,
     desk,
+    prChecks: checks,
     ports,
     queueServer: http.createServer(queueHandler),
     boardServer: http.createServer(boardHandler),

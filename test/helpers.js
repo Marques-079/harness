@@ -49,4 +49,30 @@ function makeHome(snapshot) {
   return { home, calls, setSnapshot: (s) => fs.writeFileSync(path.join(home, 'snapshot.json'), JSON.stringify(s)) };
 }
 
-module.exports = { makeHome, record, task };
+// A fake `gh` on a private PATH dir. `gh pr view <url> --json ...` prints
+// responses[<url>] as JSON; a missing entry (or the string 'fail') exits 1.
+// Every call is appended to `log` so tests can assert caching.
+function fakeGh(responses = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-gh-'));
+  const log = path.join(dir, 'calls.log');
+  const data = path.join(dir, 'responses.json');
+  const set = (r) => fs.writeFileSync(data, JSON.stringify(r));
+  set(responses);
+  const f = path.join(dir, 'gh');
+  fs.writeFileSync(f, `#!/usr/bin/env node
+const fs = require('fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, args.join(' ') + '\\n');
+const r = JSON.parse(fs.readFileSync(${JSON.stringify(data)}, 'utf8'))[args[2]];
+if (args[0] !== 'pr' || args[1] !== 'view' || r === undefined || r === 'fail') {
+  process.stderr.write('fake gh: no such PR\\n'); process.exit(1);
+}
+process.stdout.write(JSON.stringify(r));
+`);
+  fs.chmodSync(f, 0o755);
+  const env = { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}` };
+  const calls = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : []);
+  return { dir, env, calls, set };
+}
+
+module.exports = { makeHome, record, task, fakeGh };

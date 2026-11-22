@@ -19,6 +19,7 @@
   .pipe-step.done .pipe-label { color: var(--ink-dim); }
   .pipe-step.cur .pipe-label { color: var(--ink); font-weight: 500; }
   .why { font-size: 13px; color: var(--ink-faint); }
+  .ci { margin-top: 8px; }
   .rows { margin-top: 16px; border-top: 1px solid var(--rule); }
   .row { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 4px 16px; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: 15px; }
   .row:last-child { border-bottom: 0; padding-bottom: 0; }
@@ -50,7 +51,7 @@
 </header>
 <main class="page">
   <h1 class="page-title">Agent board</h1>
-  <p class="lede">Every live worker, its overall objective, and the stage it has reached on the way to an open PR.</p>
+  <p class="lede">Every live worker, its overall objective, and the stage it has reached on the way to a landed PR.</p>
   <div class="statusline" id="status"><span class="dot"></span><span>Loading…</span></div>
   <div class="section-head"><h2>Working now</h2><span class="count" id="n-live">0</span></div>
   <div class="stack" id="live"></div>
@@ -62,6 +63,7 @@
 <script>
 const open = new Set();
 const STATE_BADGE = { working: 'badge-positive', parked: 'badge-warning', blocked: 'badge-danger', failed: 'badge-danger', done: 'badge-positive', paused: 'badge-warning' };
+const CI_BADGE = { positive: 'badge-positive', warning: 'badge-warning', danger: 'badge-danger' };
 function ago(ms) {
   if (!ms) return 'unknown';
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -117,6 +119,7 @@ function render(b) {
       w.title ? el('p', { class: 'card-title' }, w.title) : null,
       pipeline(w.stages, w.stage),
       el('div', { class: 'why' }, w.stage + ' · ' + w.stageReason),
+      w.ci ? el('div', { class: 'ci' }, el('span', { class: 'badge ' + (CI_BADGE[w.ci.tone] || ''), title: 'Live PR checks and mergeability' }, w.ci.label)) : null,
       el('div', { class: 'rows' },
         row('Objective', objective(w.id, w.objective)),
         row('Last activity', el('div', null,
