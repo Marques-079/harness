@@ -4,8 +4,8 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - Zero-dependency Node app; run `npm start`, test `npm test` (node:test). Layout and data sources: see README.md.
 - Read-only against `$FM_HOME`. The only write path is `fm-inbox.sh note -` in `src/fm.js` (`submitNote`); never add fm-send / fm-captain-hold / state-file writes.
-- Stage rules live only in `src/stage.js`; replace it when workers report stages explicitly.
-- This repo is PUBLIC: tests use synthetic homes from `test/helpers.js`; never commit live Firstmate data or task names.
+- Stage rules live only in `src/stage.js` (incl. `classifyPr` for gh PR JSON); `src/ci.js` only fetches/caches read-only `gh pr view`. Replace stage.js when workers report stages explicitly.
+- This repo is PUBLIC: tests use synthetic homes and the fake `gh` (`fakeGh`) from `test/helpers.js`; never call real gh in tests or commit live Firstmate data, task names, or real repo/PR URLs.
 
 ## Maintaining this file
 

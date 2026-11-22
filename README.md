@@ -7,7 +7,7 @@ offer (answering a question) is handed back to Firstmate, never to a worker.
 | Page | Default port | What it shows |
 | --- | --- | --- |
 | Question queue | `4710` | Everything waiting on the captain, pooled, newest first, with an answer box |
-| Agent board | `4711` | Every live worker: objective, inferred stage, last activity, PR link; plus queued and recently landed tasks |
+| Agent board | `4711` | Every live worker: objective, inferred stage, last activity, PR link and live CI status; plus queued and recently landed tasks |
 
 Both pages share one look: a light/dark design system in
 `public/theme.css` (styled after benchlm.ai's palette, type and spacing, using
@@ -72,7 +72,15 @@ leaves the queue. The marker is kept in memory, so it resets if the app restarts
 **Agent board** (`GET /api/board`)
 
 - Live workers: `tasks[]` from the snapshot, which includes `current_state` from
-  `fm-crew-state.sh`, the recorded PR (`pr=` in meta), and the last status event.
+  `fm-crew-state.sh`, `pr` (`pr=` in meta, else the first `/pull/N` URL anywhere
+  in the status log, told apart by `pr.source`), and the last status event.
+- CI status (shipped PRs only): read-only
+  `gh pr view <url> --json statusCheckRollup,mergeable,mergeStateStatus,state`,
+  run in `src/ci.js`. Results (failures too) are cached per PR for 60 s, so the
+  4 s poll never hammers GitHub. A stale result is served while gh refreshes in
+  the background, and a first lookup waits at most 1.5 s, showing "Checking CI…"
+  until gh answers. If gh is missing or fails, the card shows "CI status
+  unavailable" and the stage stays at PR open. `gh` must be on `PATH` and logged in.
 - Objective: the `## Captain's intent` section of `$FM_HOME/data/<id>/brief.md`.
 - Commit progress: read-only `git rev-list` / `git status` in the worker's
   worktree against `origin/HEAD` (or `origin/main` / `origin/master`).
@@ -83,20 +91,27 @@ leaves the queue. The marker is kept in memory, so it resets if the app restarts
 ### Stage inference
 
 Workers do not report a stage yet, so `src/stage.js` infers one. All of the
-rules are in that file, so it can be swapped out when workers report stages
+rules are in that file, including how gh's PR JSON maps to a stage
+(`classifyPr`), so it can be swapped out when workers report stages
 explicitly. The first matching rule wins:
 
 | Stage | Rule |
 | --- | --- |
-| Landed | backlog row is Done (scouts: Report ready) |
+| Landed | backlog row is Done (scouts: Report ready), or the shipped PR is merged on GitHub |
 | Received | backlog row is queued, or no live worker |
 | Report ready | scout whose `report.md` exists |
-| PR open | ship with a recorded PR or a `done: PR <url>` event |
+| CI passing | shipped PR is open, every check succeeded (skipped/neutral count as passing), and it is mergeable with no conflicts |
+| PR open | ship with a **shipped** PR: `pr=` in meta, or a `done: … PR <url>` event. The card shows the sub-status: CI running (amber), CI failing: `<check>` (red), Merge conflicts (red), or CI status unavailable |
 | Reviewing | `fm-crew-state.sh` reads from source `run-step` (the validation pipeline owns the branch) |
 | Executing | commits beyond base, or uncommitted edits in the worktree |
 | Planning | worker live, nothing committed yet |
 
-Ship pipeline: Received → Planning → Executing → Reviewing → PR open → Landed.
+A PR URL that only appears in a `working:` note, such as a task that rebases an
+existing PR, or that only appears in a backlog row's links, is still shown as
+the card's pull request. It does not advance the stage, so such a task goes
+through Planning → Executing → (Reviewing) → PR open like any other ship.
+
+Ship pipeline: Received → Planning → Executing → Reviewing → PR open → CI passing → Landed.
 Scout pipeline: Received → Planning → Executing → Report ready.
 
 ## Layout
@@ -106,6 +121,7 @@ bin/harness.js   entry point (two servers)
 src/config.js    env/CLI config
 src/fm.js        Firstmate data source (read-only + the fm-inbox write)
 src/stage.js     stage inference (the only place stage rules live)
+src/ci.js        cached, async read-only `gh pr view` lookups for live PR checks
 src/queue.js     question-queue model and answer formatting
 src/answers.js   answer submission + "sent to Firstmate" tracking
 src/board.js     agent-board model

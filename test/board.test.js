@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { makeHome, record, task } = require('./helpers');
+const { makeHome, record, task, fakeGh } = require('./helpers');
+const { PrChecks } = require('../src/ci');
 const { createApp } = require('../src/server');
 
 test('board shows live workers with objective, stage and PR; queued and landed separately', async (t) => {
@@ -35,7 +36,8 @@ test('board shows live workers with objective, stage and PR; queued and landed s
     tasks: [execTask, prTask],
   });
 
-  const app = createApp({ fmHome: h.home, cacheMs: 0 });
+  const gh = fakeGh({}); // no responses: every lookup fails -> degraded
+  const app = createApp({ fmHome: h.home, cacheMs: 0, prChecks: new PrChecks({ env: gh.env, waitMs: 10000 }) });
   await new Promise((r) => app.boardServer.listen(0, '127.0.0.1', r));
   t.after(() => app.boardServer.close());
   const b = await (await fetch(`http://127.0.0.1:${app.boardServer.address().port}/api/board`)).json();
@@ -46,6 +48,7 @@ test('board shows live workers with objective, stage and PR; queued and landed s
   const pr = b.live.find((w) => w.id === 'demo-pr');
   assert.equal(pr.stage, 'PR open');
   assert.equal(pr.prUrl, 'https://example.test/o/r/pull/7');
+  assert.deepEqual(pr.ci, { label: 'CI status unavailable', tone: 'neutral' });
   assert.deepEqual(b.queued.map((q) => [q.id, q.stage]), [['demo-queued', 'Received']]);
   assert.deepEqual(b.landed.map((q) => [q.id, q.stage]), [['demo-landed', 'Landed']]);
 });

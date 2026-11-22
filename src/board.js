@@ -8,7 +8,7 @@ const { parseTime } = require('./queue');
 
 const LANDED_LIMIT = 10;
 
-async function buildBoard(snap, fm) {
+async function buildBoard(snap, fm, prChecks = null) {
   const records = (snap.backlog && snap.backlog.records) || [];
   const structured = records.filter((r) => r.structured !== false && r.id);
   const tasks = snap.tasks || [];
@@ -19,7 +19,11 @@ async function buildBoard(snap, fm) {
     const remote = Boolean(task.remote);
     const worktree = task.paths && task.paths.worktree && task.paths.worktree.path;
     const git = remote ? null : await fm.gitProgress(worktree);
-    const stage = inferStage({ task, record, git });
+    let stage = inferStage({ task, record, git });
+    // Only a shipped PR (stage PR open) is worth a forge lookup.
+    if (prChecks && stage.stage === 'PR open' && stage.shippedPrUrl) {
+      stage = inferStage({ task, record, git, ci: await prChecks.lookup(stage.shippedPrUrl) });
+    }
     const cs = task.current_state || {};
     const ev = (task.paths && task.paths.status_log && task.paths.status_log.last_event) || {};
     const statusAt = fm.mtime(task.paths && task.paths.status_log && task.paths.status_log.path);
@@ -35,6 +39,7 @@ async function buildBoard(snap, fm) {
       stages: stage.stages,
       stageReason: stage.reason,
       prUrl: stage.prUrl,
+      ci: stage.ci,
       state: cs.state || 'unknown',
       lastActivity: {
         text: ev.raw || cs.detail || null,
