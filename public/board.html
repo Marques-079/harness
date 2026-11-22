@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Board</title>
+<script src="/assets/theme.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/theme.css">
+<style>
+  .pipe { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 4px; margin: 18px 0 6px; }
+  .pipe-step { min-width: 0; }
+  .pipe-bar { height: 6px; border-radius: 999px; background: var(--panel-3); }
+  .pipe-step.done .pipe-bar { background: var(--accent-line); }
+  .pipe-step.cur .pipe-bar { background: var(--accent); }
+  .pipe-label { margin-top: 6px; font-size: 12px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pipe-step.done .pipe-label { color: var(--ink-dim); }
+  .pipe-step.cur .pipe-label { color: var(--ink); font-weight: 500; }
+  .why { font-size: 13px; color: var(--ink-faint); }
+  .rows { margin-top: 16px; border-top: 1px solid var(--rule); }
+  .row { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 4px 16px; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: 15px; }
+  .row:last-child { border-bottom: 0; padding-bottom: 0; }
+  .row-k { color: var(--ink-dim); font-size: 14px; }
+  .row-v { min-width: 0; color: var(--ink); }
+  .obj { margin-top: 8px; white-space: pre-wrap; font-size: 14px; line-height: 1.6; color: var(--ink-muted); }
+  .act { white-space: pre-wrap; }
+  .act-now { margin-top: 4px; font-size: 13px; color: var(--ink-dim); font-family: var(--font-mono); }
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 16px; }
+  .pr { font-size: 14px; }
+  @media (max-width: 640px) {
+    .row { grid-template-columns: minmax(0, 1fr); }
+    .pipe-label { font-size: 10.5px; }
+  }
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>harness</a>
+    <nav class="nav" aria-label="Pages">
+      <a href="#" data-link="queue">Question queue</a>
+      <a href="/" data-link="board" aria-current="page">Agent board</a>
+    </nav>
+    <div class="masthead-tools">
+      <button type="button" class="btn btn-seg" id="theme-toggle">Theme</button>
+    </div>
+  </div>
+</header>
+<main class="page">
+  <h1 class="page-title">Agent board</h1>
+  <p class="lede">Every live worker, its overall objective, and the stage it has reached on the way to an open PR.</p>
+  <div class="statusline" id="status"><span class="dot"></span><span>Loading…</span></div>
+  <div class="section-head"><h2>Working now</h2><span class="count" id="n-live">0</span></div>
+  <div class="stack" id="live"></div>
+  <div class="section-head"><h2>Queued</h2><span class="count" id="n-queued">0</span></div>
+  <div class="grid-2" id="queued"></div>
+  <div class="section-head"><h2>Recently landed</h2><span class="count" id="n-landed">0</span></div>
+  <div class="grid-2" id="landed"></div>
+</main>
+<script>
+const open = new Set();
+const STATE_BADGE = { working: 'badge-positive', parked: 'badge-warning', blocked: 'badge-danger', failed: 'badge-danger', done: 'badge-positive', paused: 'badge-warning' };
+function ago(ms) {
+  if (!ms) return 'unknown';
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 90) return Math.round(s) + 's ago';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 172800) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) n.setAttribute(k, v);
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+}
+function pipeline(stages, stage) {
+  const idx = stages.indexOf(stage);
+  return el('div', { class: 'pipe', style: '--n:' + stages.length, role: 'img', 'aria-label': 'Stage ' + stage + ' of ' + stages.join(', ') },
+    ...stages.map((s, i) => el('div', { class: 'pipe-step' + (i < idx ? ' done' : i === idx ? ' cur' : '') },
+      el('div', { class: 'pipe-bar' }), el('div', { class: 'pipe-label', title: s }, s))));
+}
+function objective(id, text) {
+  if (!text) return el('span', { class: 'why' }, 'No captain’s intent recorded.');
+  const first = text.split('\n')[0];
+  const short = first.length > 160 ? first.slice(0, 160) + '…' : first;
+  const d = el('details', open.has(id) ? { open: '' } : null, el('summary', null, short), el('div', { class: 'obj' }, text));
+  d.addEventListener('toggle', () => d.open ? open.add(id) : open.delete(id));
+  return d;
+}
+function prLink(url) { return url ? el('a', { class: 'pr', href: url, target: '_blank', rel: 'noopener' }, url.replace(/^https:\/\/(www\.)?github\.com\//, '')) : null; }
+function row(k, v) { return el('div', { class: 'row' }, el('div', { class: 'row-k' }, k), el('div', { class: 'row-v' }, v)); }
+function empty(text) { return el('div', { class: 'empty' }, text); }
+function setStatus(text, err) {
+  const st = document.getElementById('status');
+  st.className = 'statusline' + (err ? ' err' : '');
+  st.replaceChildren(el('span', { class: 'dot' }), el('span', null, text));
+}
+
+function render(b) {
+  document.getElementById('n-live').textContent = b.live.length;
+  document.getElementById('n-queued').textContent = b.queued.length;
+  document.getElementById('n-landed').textContent = b.landed.length;
+
+  const live = document.getElementById('live'); live.textContent = '';
+  if (!b.live.length) live.append(empty('No live workers.'));
+  for (const w of b.live) {
+    live.append(el('article', { class: 'card' },
+      el('div', { class: 'card-head' },
+        el('span', { class: 'task-id' }, w.id),
+        el('span', { class: 'badge' }, w.kind || '?'),
+        el('span', { class: 'badge ' + (STATE_BADGE[w.state] || '') }, w.state),
+        w.waitingOnCaptain ? el('span', { class: 'badge badge-danger' }, 'Waiting on captain') : null,
+        el('span', { class: 'sub spacer' }, w.project || '')),
+      w.title ? el('p', { class: 'card-title' }, w.title) : null,
+      pipeline(w.stages, w.stage),
+      el('div', { class: 'why' }, w.stage + ' · ' + w.stageReason),
+      el('div', { class: 'rows' },
+        row('Objective', objective(w.id, w.objective)),
+        row('Last activity', el('div', null,
+          el('div', { class: 'act' }, ago(w.lastActivity.at) + (w.lastActivity.text ? ' · ' + w.lastActivity.text : '')),
+          w.lastActivity.current ? el('div', { class: 'act-now' }, w.lastActivity.current) : null)),
+        w.prUrl ? row('Pull request', prLink(w.prUrl)) : null)));
+  }
+
+  const q = document.getElementById('queued'); q.textContent = '';
+  if (!b.queued.length) q.append(empty('Nothing queued.'));
+  for (const t of b.queued) {
+    q.append(el('article', { class: 'card' },
+      el('div', { class: 'card-head' },
+        el('span', { class: 'task-id' }, t.id),
+        el('span', { class: 'badge' }, t.kind || '?'),
+        t.hold ? el('span', { class: 'badge badge-warning' }, 'Hold · ' + t.hold.kind + (t.hold.bucket ? ' · ' + t.hold.bucket : '')) : null,
+        t.blockedBy.length ? el('span', { class: 'badge badge-danger' }, 'Blocked by ' + t.blockedBy.join(', ')) : null,
+        el('span', { class: 'sub spacer' }, t.project || '')),
+      t.title ? el('p', { class: 'card-title' }, t.title) : null,
+      el('div', { class: 'rows' },
+        t.hold && t.hold.reason ? row('Hold', t.hold.reason) : null,
+        t.objective ? row('Objective', objective(t.id, t.objective)) : null,
+        row('Stage', t.stage))));
+  }
+
+  const l = document.getElementById('landed'); l.textContent = '';
+  if (!b.landed.length) l.append(empty('Nothing landed yet.'));
+  for (const t of b.landed) {
+    l.append(el('article', { class: 'card' },
+      el('div', { class: 'card-head' },
+        el('span', { class: 'task-id' }, t.id),
+        el('span', { class: 'badge badge-positive' }, t.stage),
+        el('span', { class: 'sub spacer' }, (t.project ? t.project + ' · ' : '') + (t.doneDate || ago(t.doneAt)))),
+      t.title ? el('p', { class: 'card-title' }, t.title) : null,
+      t.prUrl ? el('div', { style: 'margin-top:8px' }, prLink(t.prUrl)) : null));
+  }
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/board');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    setStatus('Live · snapshot ' + (j.generated || '') + ' · refreshes every 4s');
+    render(j);
+  } catch (e) { setStatus('Refresh failed: ' + e.message, true); }
+}
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>

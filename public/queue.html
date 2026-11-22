@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Question Queue</title>
+<script src="/assets/theme.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/theme.css">
+<style>
+  .q-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 14px; color: var(--ink-dim); }
+  .q-question { margin: 14px 0 0; font-size: 17px; line-height: 1.55; white-space: pre-wrap; color: var(--ink); }
+  .q-context { margin: 10px 0 0; padding: 10px 12px; font-size: 14px; line-height: 1.55; white-space: pre-wrap;
+    color: var(--ink-muted); background: var(--sunken); border: 1px solid var(--rule); border-radius: var(--radius-control); }
+  .q-answer { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--rule); display: grid; gap: 10px; }
+  .q-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  .q-hint { font-size: 13px; color: var(--ink-faint); }
+  .q-err { font-size: 14px; color: var(--danger); }
+  .q-sent { margin-top: 18px; padding: 12px 14px; border-radius: var(--radius-control);
+    background: var(--accent-wash); border: 1px solid var(--accent-line); }
+  .q-sent-label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--accent); }
+  .q-sent-text { margin-top: 6px; font-size: 15px; white-space: pre-wrap; color: var(--ink); }
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>harness</a>
+    <nav class="nav" aria-label="Pages">
+      <a href="/" data-link="queue" aria-current="page">Question queue</a>
+      <a href="#" data-link="board">Agent board</a>
+    </nav>
+    <div class="masthead-tools">
+      <button type="button" class="btn btn-seg" id="theme-toggle">Theme</button>
+    </div>
+  </div>
+</header>
+<main class="page">
+  <h1 class="page-title">Question queue</h1>
+  <p class="lede">Everything waiting on the captain, pooled from every agent. Answers go to Firstmate through <code>fm-inbox.sh note</code>, and Firstmate routes them.</p>
+  <div class="statusline" id="status"><span class="dot"></span><span>Loading…</span></div>
+  <div class="section-head"><h2>Waiting on you</h2><span class="count" id="count">0</span><span class="meta">Newest first</span></div>
+  <div class="stack" id="list"></div>
+</main>
+<script>
+const list = document.getElementById('list');
+const statusEl = document.getElementById('status');
+const countEl = document.getElementById('count');
+const drafts = {};
+const TYPE_BADGE = { 'captain-hold': ['Captain hold', 'badge-info'], 'needs-decision': ['Needs decision', 'badge-warning'], blocked: ['Blocked', 'badge-danger'] };
+
+function ago(ms) {
+  if (!ms) return 'age unknown';
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 90) return Math.round(s) + 's ago';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 172800) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) n.setAttribute(k, v);
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+}
+function setStatus(text, err) {
+  statusEl.className = 'statusline' + (err ? ' err' : '');
+  statusEl.replaceChildren(el('span', { class: 'dot' }), el('span', null, text));
+}
+
+function render(items) {
+  // Keep drafts and focus intact across refreshes.
+  list.querySelectorAll('textarea').forEach((t) => { drafts[t.dataset.id] = t.value; });
+  const focused = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.id;
+  list.textContent = '';
+  countEl.textContent = items.length;
+  if (!items.length) { list.append(el('div', { class: 'empty' }, 'Nothing is waiting on you.')); return; }
+  for (const it of items) {
+    const [label, cls] = TYPE_BADGE[it.type] || [it.type, ''];
+    const card = el('article', { class: 'card' },
+      el('div', { class: 'card-head' },
+        el('span', { class: 'badge ' + cls }, label),
+        el('span', { class: 'task-id' }, it.taskId),
+        it.key && it.key !== 'default' ? el('span', { class: 'badge' }, 'key ' + it.key) : null,
+        el('span', { class: 'sub spacer' }, ago(it.askedAt))),
+      el('div', { class: 'q-meta', style: 'margin-top:6px' },
+        el('span', null, it.project || 'unknown project'),
+        it.title ? el('span', { class: 'sep' }, '·') : null,
+        it.title ? el('span', null, it.title) : null),
+      el('p', { class: 'q-question' }, it.question),
+      it.context ? el('div', { class: 'q-context' }, it.context) : null);
+    if (it.sent) {
+      card.append(el('div', { class: 'q-sent' },
+        el('div', { class: 'q-sent-label' }, '✓ Sent to Firstmate · ' + ago(it.sent.at)),
+        el('div', { class: 'q-sent-text' }, it.sent.text)));
+    } else {
+      const ta = el('textarea', { 'data-id': it.id, placeholder: 'Your answer…', 'aria-label': 'Answer for ' + it.taskId });
+      ta.value = drafts[it.id] || '';
+      const btn = el('button', { type: 'button', class: 'btn btn-primary' }, 'Send to Firstmate');
+      const msg = el('span', { class: 'q-err', role: 'status' });
+      btn.onclick = async () => {
+        btn.disabled = true; msg.textContent = '';
+        try {
+          const r = await fetch('/api/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: it.id, text: ta.value }) });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || r.statusText);
+          delete drafts[it.id];
+          refresh();
+        } catch (e) { msg.textContent = e.message; btn.disabled = false; }
+      };
+      card.append(el('div', { class: 'q-answer' }, ta,
+        el('div', { class: 'q-actions' }, btn, el('span', { class: 'q-hint' }, 'Firstmate decides where it goes'), msg)));
+      if (focused === it.id) setTimeout(() => ta.focus());
+    }
+    list.append(card);
+  }
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/queue');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    setStatus('Live · snapshot ' + (j.generated || '') + ' · refreshes every 4s');
+    render(j.items);
+  } catch (e) { setStatus('Refresh failed: ' + e.message, true); }
+}
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>
