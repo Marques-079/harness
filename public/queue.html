@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Question Queue</title>
+<style>
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 960px; background: #fafafa; color: #222; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .meta { color: #666; font-size: 12px; margin-bottom: 16px; }
+  .err { color: #b00020; }
+  .item { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+  .head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 12px; color: #555; }
+  .tag { padding: 1px 6px; border-radius: 3px; background: #eee; font-weight: 600; }
+  .tag.blocked { background: #fde2e2; } .tag.needs-decision { background: #fff1cc; } .tag.captain-hold { background: #dfeafd; }
+  .task { font-family: ui-monospace, monospace; }
+  .question { white-space: pre-wrap; margin: 8px 0; font-size: 15px; }
+  .context { white-space: pre-wrap; color: #666; font-size: 12px; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 60px; font: inherit; }
+  .sent { background: #e7f6e7; border-radius: 4px; padding: 6px 8px; white-space: pre-wrap; }
+  .empty { color: #666; padding: 32px 0; text-align: center; }
+</style>
+</head>
+<body>
+<h1>Question queue</h1>
+<div class="meta">Everything waiting on the captain. Answers go to Firstmate (<code>fm-inbox.sh note</code>), which routes them. <span id="status"></span></div>
+<div id="list"></div>
+<script>
+const list = document.getElementById('list');
+const statusEl = document.getElementById('status');
+const drafts = {};
+
+function ago(ms) {
+  if (!ms) return 'age unknown';
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 90) return Math.round(s) + 's ago';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 172800) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) n.setAttribute(k, v);
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+}
+
+function render(items) {
+  // Keep any focused draft intact across refreshes.
+  list.querySelectorAll('textarea').forEach((t) => { drafts[t.dataset.id] = t.value; });
+  const focused = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.id;
+  list.textContent = '';
+  if (!items.length) { list.append(el('div', { class: 'empty' }, 'Nothing is waiting on you.')); return; }
+  for (const it of items) {
+    const box = el('div', { class: 'item' },
+      el('div', { class: 'head' },
+        el('span', { class: 'tag ' + it.type }, it.type),
+        el('span', null, it.project || '?'),
+        el('span', { class: 'task' }, it.taskId + (it.key && it.key !== 'default' ? ' [' + it.key + ']' : '')),
+        el('span', null, ago(it.askedAt))),
+      it.title ? el('div', { class: 'context' }, it.title) : null,
+      el('div', { class: 'question' }, it.question),
+      it.context ? el('div', { class: 'context' }, it.context) : null);
+    if (it.sent) {
+      box.append(el('div', { class: 'sent' }, 'Sent to Firstmate ' + ago(it.sent.at) + ': ' + it.sent.text));
+    } else {
+      const ta = el('textarea', { 'data-id': it.id, placeholder: 'Your answer…' });
+      ta.value = drafts[it.id] || '';
+      const btn = el('button', null, 'Send to Firstmate');
+      const msg = el('span', { class: 'err' });
+      btn.onclick = async () => {
+        btn.disabled = true; msg.textContent = '';
+        try {
+          const r = await fetch('/api/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: it.id, text: ta.value }) });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || r.statusText);
+          delete drafts[it.id];
+          refresh();
+        } catch (e) { msg.textContent = ' ' + e.message; btn.disabled = false; }
+      };
+      box.append(ta, el('div', null, btn, msg));
+      if (focused === it.id) setTimeout(() => ta.focus());
+    }
+    list.append(box);
+  }
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/queue');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    statusEl.textContent = '· ' + j.items.length + ' waiting · snapshot ' + (j.generated || '');
+    statusEl.className = '';
+    render(j.items);
+  } catch (e) { statusEl.textContent = '· refresh failed: ' + e.message; statusEl.className = 'err'; }
+}
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>

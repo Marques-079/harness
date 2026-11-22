@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Board</title>
+<style>
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 1100px; background: #fafafa; color: #222; }
+  h1 { font-size: 20px; margin: 0 0 4px; } h2 { font-size: 15px; margin: 24px 0 8px; }
+  .meta { color: #666; font-size: 12px; } .err { color: #b00020; }
+  .card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+  .head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+  .task { font-family: ui-monospace, monospace; font-weight: 600; }
+  .tag { padding: 1px 6px; border-radius: 3px; background: #eee; font-size: 12px; }
+  .tag.attn { background: #fde2e2; }
+  .pipe { display: flex; flex-wrap: wrap; gap: 2px; margin: 8px 0; font-size: 12px; }
+  .pipe span { padding: 2px 8px; background: #eee; color: #888; }
+  .pipe span.done { background: #d6e9d6; color: #333; }
+  .pipe span.cur { background: #2b6cb0; color: #fff; font-weight: 600; }
+  .why { color: #888; font-size: 12px; }
+  details summary { cursor: pointer; color: #444; }
+  .obj { white-space: pre-wrap; font-size: 13px; }
+  .act { color: #555; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  .empty { color: #666; }
+</style>
+</head>
+<body>
+<h1>Agent board</h1>
+<div class="meta">Live workers, their objective and inferred stage. <span id="status"></span></div>
+<h2>Working now</h2><div id="live"></div>
+<h2>Queued</h2><div id="queued"></div>
+<h2>Recently landed</h2><div id="landed"></div>
+<script>
+const open = new Set();
+function ago(ms) {
+  if (!ms) return 'unknown';
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 90) return Math.round(s) + 's ago';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 172800) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) n.setAttribute(k, v);
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+}
+function pipeline(stages, stage) {
+  const idx = stages.indexOf(stage);
+  return el('div', { class: 'pipe' }, ...stages.map((s, i) =>
+    el('span', { class: i < idx ? 'done' : i === idx ? 'cur' : '' }, s)));
+}
+function objective(id, text) {
+  if (!text) return el('div', { class: 'why' }, 'No captain\'s intent recorded.');
+  const first = text.split('\n')[0];
+  const short = first.length > 160 ? first.slice(0, 160) + '…' : first;
+  const d = el('details', open.has(id) ? { open: '' } : null, el('summary', null, short), el('div', { class: 'obj' }, text));
+  d.addEventListener('toggle', () => d.open ? open.add(id) : open.delete(id));
+  return d;
+}
+function prLink(url) { return url ? el('a', { href: url, target: '_blank', rel: 'noopener' }, url) : null; }
+
+function render(b) {
+  const live = document.getElementById('live'); live.textContent = '';
+  if (!b.live.length) live.append(el('div', { class: 'empty' }, 'No live workers.'));
+  for (const w of b.live) {
+    live.append(el('div', { class: 'card' },
+      el('div', { class: 'head' },
+        el('span', { class: 'task' }, w.id),
+        el('span', { class: 'tag' }, w.project || '?'),
+        el('span', { class: 'tag' }, w.kind || '?'),
+        el('span', { class: 'tag' }, 'state: ' + w.state),
+        w.waitingOnCaptain ? el('span', { class: 'tag attn' }, 'waiting on captain') : null,
+        prLink(w.prUrl)),
+      pipeline(w.stages, w.stage),
+      el('div', { class: 'why' }, 'why ' + w.stage + ': ' + w.stageReason),
+      objective(w.id, w.objective),
+      el('div', { class: 'act' }, 'Last activity ' + ago(w.lastActivity.at) + (w.lastActivity.text ? ': ' + w.lastActivity.text : '') +
+        (w.lastActivity.current ? '\nNow: ' + w.lastActivity.current : ''))));
+  }
+  const q = document.getElementById('queued'); q.textContent = '';
+  if (!b.queued.length) q.append(el('div', { class: 'empty' }, 'Nothing queued.'));
+  for (const t of b.queued) {
+    q.append(el('div', { class: 'card' },
+      el('div', { class: 'head' },
+        el('span', { class: 'task' }, t.id),
+        el('span', { class: 'tag' }, t.project || '?'),
+        el('span', { class: 'tag' }, t.kind || '?'),
+        t.hold ? el('span', { class: 'tag attn' }, 'hold (' + t.hold.kind + (t.hold.bucket ? ', ' + t.hold.bucket : '') + ')') : null,
+        t.blockedBy.length ? el('span', { class: 'tag' }, 'blocked by ' + t.blockedBy.join(', ')) : null),
+      t.title ? el('div', null, t.title) : null,
+      t.hold && t.hold.reason ? el('div', { class: 'act' }, 'Hold: ' + t.hold.reason) : null,
+      t.objective ? objective(t.id, t.objective) : null));
+  }
+  const l = document.getElementById('landed'); l.textContent = '';
+  if (!b.landed.length) l.append(el('div', { class: 'empty' }, 'Nothing landed yet.'));
+  for (const t of b.landed) {
+    l.append(el('div', { class: 'card' },
+      el('div', { class: 'head' },
+        el('span', { class: 'task' }, t.id),
+        el('span', { class: 'tag' }, t.project || '?'),
+        el('span', { class: 'tag' }, t.stage + ' (' + t.verb + ')'),
+        el('span', { class: 'why' }, t.doneDate || ago(t.doneAt)),
+        prLink(t.prUrl)),
+      t.title ? el('div', null, t.title) : null));
+  }
+}
+
+async function refresh() {
+  const st = document.getElementById('status');
+  try {
+    const r = await fetch('/api/board');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    st.textContent = '· snapshot ' + (j.generated || ''); st.className = '';
+    render(j);
+  } catch (e) { st.textContent = '· refresh failed: ' + e.message; st.className = 'err'; }
+}
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>
