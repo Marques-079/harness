@@ -72,3 +72,26 @@ test('pages are served as HTML', async (t) => {
     assert.match(await res.text(), /^<!doctype html>/);
   }
 });
+
+test('shared theme assets and cross-page links are served on both ports', async (t) => {
+  const h = makeHome({ schema: 'fm-fleet-snapshot.v1', backlog: { records: [] }, tasks: [] });
+  const app = createApp({ fmHome: h.home, cacheMs: 0 });
+  for (const s of [app.queueServer, app.boardServer]) {
+    await new Promise((r) => s.listen(0, '127.0.0.1', r));
+    t.after(() => s.close());
+  }
+  app.ports.queue = app.queueServer.address().port;
+  app.ports.board = app.boardServer.address().port;
+  for (const port of [app.ports.queue, app.ports.board]) {
+    const css = await fetch(`http://127.0.0.1:${port}/assets/theme.css`);
+    assert.match(css.headers.get('content-type'), /text\/css/);
+    assert.match(await css.text(), /prefers-color-scheme: dark/);
+    const js = await fetch(`http://127.0.0.1:${port}/assets/theme.js`);
+    assert.match(js.headers.get('content-type'), /javascript/);
+    const links = await (await fetch(`http://127.0.0.1:${port}/api/links`)).json();
+    assert.deepEqual(links, {
+      queue: `http://127.0.0.1:${app.ports.queue}/`,
+      board: `http://127.0.0.1:${app.ports.board}/`,
+    });
+  }
+});

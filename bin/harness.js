@@ -20,8 +20,12 @@ try {
 if (cfg.help) { console.log(HELP); process.exit(0); }
 
 const app = createApp({ fmHome: cfg.fmHome, cacheMs: cfg.cacheMs });
-app.queueServer.listen(cfg.queuePort, cfg.host, () =>
-  console.log(`question queue  http://${cfg.host}:${app.queueServer.address().port}/`));
-app.boardServer.listen(cfg.boardPort, cfg.host, () =>
-  console.log(`agent board     http://${cfg.host}:${app.boardServer.address().port}/`));
+app.queueServer.listen(cfg.queuePort, cfg.host, () => {
+  app.ports.queue = app.queueServer.address().port;
+  console.log(`question queue  http://${cfg.host}:${app.ports.queue}/`);
+});
+app.boardServer.listen(cfg.boardPort, cfg.host, () => {
+  app.ports.board = app.boardServer.address().port;
+  console.log(`agent board     http://${cfg.host}:${app.ports.board}/`);
+});
 console.log(`FM_HOME=${cfg.fmHome}`);

@@ -9,7 +9,14 @@ offer (answering a question) is handed back to Firstmate, never to a worker.
 | Question queue | `4710` | Everything waiting on the captain, pooled, newest first, with an answer box |
 | Agent board | `4711` | Every live worker: objective, inferred stage, last activity, PR link; plus queued and recently landed tasks |
 
-Plain, functional HTML for now; UI polish comes later.
+Both pages share one look: a light/dark design system in
+`public/theme.css` (styled after benchlm.ai's palette, type and spacing, using
+the freely licensed Geist fonts from Google Fonts). Every colour is a CSS
+variable, and dark mode is a second set of values for those same variables. By
+default the pages follow the OS `prefers-color-scheme`. The **Dark/Light**
+button in the header overrides that, and the choice is saved per browser with
+`localStorage`. The two pages run on different ports, which the browser treats
+as different origins, so each page remembers its own choice.
 
 ## Running
 
@@ -103,7 +110,7 @@ src/queue.js     question-queue model and answer formatting
 src/answers.js   answer submission + "sent to Firstmate" tracking
 src/board.js     agent-board model
 src/server.js    HTTP routes
-public/          the two pages
+public/          the two pages + shared theme.css / theme.js
 test/            node:test suites on a synthetic FM_HOME (no live data)
 ```
 

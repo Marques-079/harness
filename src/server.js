@@ -13,6 +13,10 @@ const { buildBoard } = require('./board');
 const { AnswerDesk } = require('./answers');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
+const ASSETS = {
+  '/assets/theme.css': ['theme.css', 'text/css; charset=utf-8'],
+  '/assets/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
+};
 
 function send(res, status, body, type = 'application/json; charset=utf-8') {
   const data = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
@@ -20,12 +24,27 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
   res.end(data);
 }
 
-function sendPage(res, file) {
+function sendPage(res, file, type = 'text/html; charset=utf-8') {
   if (file === null) { res.writeHead(204); res.end(); return; }
   fs.readFile(path.join(PUBLIC, file), (err, buf) => {
     if (err) return send(res, 500, { error: 'page missing' });
-    send(res, 200, buf, 'text/html; charset=utf-8');
+    send(res, 200, buf, type);
   });
+}
+
+// Shared routes on both servers: theme assets, favicon, cross-page links.
+function common(req, res, url, ports) {
+  if (req.method !== 'GET') return false;
+  const asset = ASSETS[url.pathname];
+  if (asset) { sendPage(res, asset[0], asset[1]); return true; }
+  if (url.pathname === '/favicon.ico') { sendPage(res, null); return true; }
+  if (url.pathname === '/api/links') {
+    const host = new URL(`http://${req.headers.host || 'localhost'}`).hostname;
+    const link = (p) => (p ? `http://${host.includes(':') ? `[${host}]` : host}:${p}/` : null);
+    send(res, 200, { queue: link(ports.queue), board: link(ports.board) });
+    return true;
+  }
+  return false;
 }
 
 function readJson(req, limit = 64 * 1024) {
@@ -58,6 +77,7 @@ function fail(res, err) {
 }
 
 function createApp({ fmHome, cacheMs = 3000, runner } = {}) {
+  const ports = { queue: null, board: null }; // filled in by the caller once listening
   const fm = new Firstmate(fmHome, { cacheMs, runner });
   const desk = new AnswerDesk(fm);
   const currentQueue = async () => {
@@ -69,7 +89,7 @@ function createApp({ fmHome, cacheMs = 3000, runner } = {}) {
     const url = new URL(req.url, 'http://x');
     try {
       if (req.method === 'GET' && url.pathname === '/') return sendPage(res, 'queue.html');
-      if (url.pathname === '/favicon.ico') return sendPage(res, null);
+      if (common(req, res, url, ports)) return undefined;
       if (req.method === 'GET' && url.pathname === '/api/queue') {
         const q = await currentQueue();
         return send(res, 200, { generated: q.generated, items: desk.annotate(q.items) });
@@ -89,7 +109,7 @@ function createApp({ fmHome, cacheMs = 3000, runner } = {}) {
     const url = new URL(req.url, 'http://x');
     try {
       if (req.method === 'GET' && url.pathname === '/') return sendPage(res, 'board.html');
-      if (url.pathname === '/favicon.ico') return sendPage(res, null);
+      if (common(req, res, url, ports)) return undefined;
       if (req.method === 'GET' && url.pathname === '/api/board') {
         return send(res, 200, await buildBoard(await fm.snapshot(), fm));
       }
@@ -100,6 +120,7 @@ function createApp({ fmHome, cacheMs = 3000, runner } = {}) {
   return {
     fm,
     desk,
+    ports,
     queueServer: http.createServer(queueHandler),
     boardServer: http.createServer(boardHandler),
   };
