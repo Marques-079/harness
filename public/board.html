@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Board</title>
 <script src="/assets/theme.js"></script>
+<script src="/assets/live.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
@@ -95,11 +96,6 @@ function objective(id, text) {
 function prLink(url) { return url ? el('a', { class: 'pr', href: url, target: '_blank', rel: 'noopener' }, url.replace(/^https:\/\/(www\.)?github\.com\//, '')) : null; }
 function row(k, v) { return el('div', { class: 'row' }, el('div', { class: 'row-k' }, k), el('div', { class: 'row-v' }, v)); }
 function empty(text) { return el('div', { class: 'empty' }, text); }
-function setStatus(text, err) {
-  const st = document.getElementById('status');
-  st.className = 'statusline' + (err ? ' err' : '');
-  st.replaceChildren(el('span', { class: 'dot' }), el('span', null, text));
-}
 
 function render(b) {
   document.getElementById('n-live').textContent = b.live.length;
@@ -158,17 +154,7 @@ function render(b) {
   }
 }
 
-async function refresh() {
-  try {
-    const r = await fetch('/api/board');
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.statusText);
-    setStatus('Live · snapshot ' + (j.generated || '') + ' · refreshes every 4s');
-    render(j);
-  } catch (e) { setStatus('Refresh failed: ' + e.message, true); }
-}
-refresh();
-setInterval(refresh, 4000);
+const poller = HarnessLive.start({ url: '/api/board', cacheKey: 'harness-cache-board', statusEl: document.getElementById('status'), render });
 </script>
 </body>
 </html>

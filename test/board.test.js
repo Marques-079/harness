@@ -37,7 +37,7 @@ test('board shows live workers with objective, stage and PR; queued and landed s
   });
 
   const gh = fakeGh({}); // no responses: every lookup fails -> degraded
-  const app = createApp({ fmHome: h.home, cacheMs: 0, prChecks: new PrChecks({ env: gh.env, waitMs: 10000 }) });
+  const app = createApp({ fmHome: h.home, prChecks: new PrChecks({ env: gh.env, waitMs: 10000 }) });
   await new Promise((r) => app.boardServer.listen(0, '127.0.0.1', r));
   t.after(() => app.boardServer.close());
   const b = await (await fetch(`http://127.0.0.1:${app.boardServer.address().port}/api/board`)).json();
@@ -62,11 +62,15 @@ test('config: env defaults and CLI overrides', () => {
   const d = loadConfig([], {});
   assert.equal(d.queuePort, 4710);
   assert.equal(d.boardPort, 4711);
+  assert.equal(d.refreshMs, 5000);
+  assert.equal(loadConfig(['--refresh-ms', '2000'], { HARNESS_REFRESH_MS: '9000' }).refreshMs, 2000);
+  assert.equal(loadConfig([], { HARNESS_REFRESH_MS: '9000' }).refreshMs, 9000);
+  assert.throws(() => loadConfig(['--refresh-ms', '0'], {}), /refresh interval/);
 });
 
 test('pages are served as HTML', async (t) => {
   const h = makeHome({ schema: 'fm-fleet-snapshot.v1', backlog: { records: [] }, tasks: [] });
-  const app = createApp({ fmHome: h.home, cacheMs: 0 });
+  const app = createApp({ fmHome: h.home });
   for (const s of [app.queueServer, app.boardServer]) {
     await new Promise((r) => s.listen(0, '127.0.0.1', r));
     t.after(() => s.close());
@@ -78,7 +82,7 @@ test('pages are served as HTML', async (t) => {
 
 test('shared theme assets and cross-page links are served on both ports', async (t) => {
   const h = makeHome({ schema: 'fm-fleet-snapshot.v1', backlog: { records: [] }, tasks: [] });
-  const app = createApp({ fmHome: h.home, cacheMs: 0 });
+  const app = createApp({ fmHome: h.home });
   for (const s of [app.queueServer, app.boardServer]) {
     await new Promise((r) => s.listen(0, '127.0.0.1', r));
     t.after(() => s.close());
@@ -89,8 +93,10 @@ test('shared theme assets and cross-page links are served on both ports', async 
     const css = await fetch(`http://127.0.0.1:${port}/assets/theme.css`);
     assert.match(css.headers.get('content-type'), /text\/css/);
     assert.match(await css.text(), /prefers-color-scheme: dark/);
-    const js = await fetch(`http://127.0.0.1:${port}/assets/theme.js`);
-    assert.match(js.headers.get('content-type'), /javascript/);
+    for (const asset of ['theme.js', 'live.js']) {
+      const js = await fetch(`http://127.0.0.1:${port}/assets/${asset}`);
+      assert.match(js.headers.get('content-type'), /javascript/);
+    }
     const links = await (await fetch(`http://127.0.0.1:${port}/api/links`)).json();
     assert.deepEqual(links, {
       queue: `http://127.0.0.1:${app.ports.queue}/`,
