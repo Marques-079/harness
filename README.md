@@ -35,15 +35,46 @@ npm test
 | Queue port | `HARNESS_QUEUE_PORT` | `--queue-port` | `4710` |
 | Board port | `HARNESS_BOARD_PORT` | `--board-port` | `4711` |
 | Bind address | `HARNESS_HOST` | `--host` | `127.0.0.1` |
-| Snapshot reuse window (ms) | `HARNESS_CACHE_MS` | `--cache-ms` | `3000` |
+| Background refresh interval (ms) | `HARNESS_REFRESH_MS` | `--refresh-ms` | `5000` |
 
-Pages poll their JSON endpoint every 4 s. Flags override env.
+Flags override env.
+
+## Freshness
+
+Building the data is slow: one `fm-fleet-snapshot.sh --json` run takes a few
+seconds, plus per-worker git reads and `gh` PR lookups. So no request ever
+waits for it except the very first one after the process starts.
+
+- **Server: kept warm, stale-while-revalidate.** `src/refresher.js` recomputes
+  the snapshot *and* both payloads built from it (queue items, board with git
+  progress and CI) in the background every `--refresh-ms` (default 5 s). The
+  interval counts from the start of a run, and runs never overlap: if one takes
+  longer than the interval, the next starts when it finishes. Both endpoints
+  return the last good result at once. A failed run never replaces good data:
+  the last good payload keeps being served and is marked stale. Each payload
+  carries `fresh: { updatedAt, refreshMs, stale, error, errorAt }`.
+- **Page: instant render.** Each page keeps its last payload in `localStorage`
+  and draws it straight away on load ("Saved view · updated 2m ago ·
+  updating…"), then swaps in fresh data. It polls every 4 s and also refreshes
+  as soon as the tab becomes visible or the window gets focus, because browsers
+  throttle timers in background tabs. The status line shows how old the data
+  is ("Live · updated 3s ago").
+- **Quiet reconnect.** If a poll fails, for example while the server restarts,
+  the data stays on screen with an amber "Reconnecting…" status. It retries
+  after 1 s, 2 s, 4 s, 8 s, then every 10 s, and clears on the next success.
+  The status only turns red after 30 s without reaching the server. When the
+  server is up but its snapshot runs are failing, the status is amber with
+  "Firstmate snapshot failing, showing last good data".
+- **Answers stay explicit.** A failed answer submission always shows "Not sent:
+  …" on its card, and that message survives refreshes. After a successful
+  submission the server starts a refresh straight away, so Firstmate's reaction
+  shows up sooner.
 
 ## What each page reads
 
-Both pages share one cached run of `$FM_HOME/bin/fm-fleet-snapshot.sh --json`
-(schema `fm-fleet-snapshot.v1`), Firstmate's versioned machine contract, rather
-than parsing raw state files.
+Both pages share the background refresher's run of
+`$FM_HOME/bin/fm-fleet-snapshot.sh --json` (schema `fm-fleet-snapshot.v1`),
+Firstmate's versioned machine contract, rather than parsing raw state files.
 
 **Question queue** (`GET /api/queue`)
 
@@ -77,9 +108,9 @@ leaves the queue. The marker is kept in memory, so it resets if the app restarts
 - CI status (shipped PRs only): read-only
   `gh pr view <url> --json statusCheckRollup,mergeable,mergeStateStatus,state`,
   run in `src/ci.js`. Results (failures too) are cached per PR for 60 s, so the
-  4 s poll never hammers GitHub. A stale result is served while gh refreshes in
-  the background, and a first lookup waits at most 1.5 s, showing "Checking CI…"
-  until gh answers. If gh is missing or fails, the card shows "CI status
+  background refresh never hammers GitHub. A stale result is served while gh
+  refreshes in the background, and a first lookup waits at most 1.5 s, showing
+  "Checking CI…" until gh answers. If gh is missing or fails, the card shows "CI status
   unavailable" and the stage stays at PR open. `gh` must be on `PATH` and logged in.
 - Objective: the `## Captain's intent` section of `$FM_HOME/data/<id>/brief.md`.
 - Commit progress: read-only `git rev-list` / `git status` in the worker's
@@ -120,13 +151,14 @@ Scout pipeline: Received → Planning → Executing → Report ready.
 bin/harness.js   entry point (two servers)
 src/config.js    env/CLI config
 src/fm.js        Firstmate data source (read-only + the fm-inbox write)
+src/refresher.js background keep-warm, stale-while-revalidate holder for the payloads
 src/stage.js     stage inference (the only place stage rules live)
 src/ci.js        cached, async read-only `gh pr view` lookups for live PR checks
 src/queue.js     question-queue model and answer formatting
 src/answers.js   answer submission + "sent to Firstmate" tracking
 src/board.js     agent-board model
 src/server.js    HTTP routes
-public/          the two pages + shared theme.css / theme.js
+public/          the two pages + shared theme.css / theme.js / live.js (polling + saved view)
 test/            node:test suites on a synthetic FM_HOME (no live data)
 ```
 

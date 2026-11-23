@@ -71,7 +71,7 @@ test('board: CI passing, PR open with sub-status, merged -> Landed, mentioned PR
     [url(12)]: { state: 'MERGED' },
     [url(13)]: { state: 'MERGED' },
   });
-  const app = createApp({ fmHome: h.home, cacheMs: 0, prChecks: new PrChecks({ env: gh.env, waitMs: 10000 }) });
+  const app = createApp({ fmHome: h.home, prChecks: new PrChecks({ env: gh.env, waitMs: 10000 }) });
   await new Promise((r) => app.boardServer.listen(0, '127.0.0.1', r));
   t.after(() => app.boardServer.close());
   const get = async () => (await (await fetch(`http://127.0.0.1:${app.boardServer.address().port}/api/board`)).json());

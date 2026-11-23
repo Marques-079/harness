@@ -2,7 +2,8 @@
 // Two small HTTP servers over one shared Firstmate data source:
 //   queue (default :4710)  GET /  GET /api/queue  POST /api/answer
 //   board (default :4711)  GET /  GET /api/board
-// Pages poll their JSON endpoint every few seconds.
+// Pages poll their JSON endpoint every few seconds. Both endpoints serve the
+// last good payload from one shared Refresher, kept warm in the background.
 
 const http = require('node:http');
 const fs = require('node:fs');
@@ -12,11 +13,13 @@ const { buildQueue } = require('./queue');
 const { buildBoard } = require('./board');
 const { AnswerDesk } = require('./answers');
 const { PrChecks } = require('./ci');
+const { Refresher } = require('./refresher');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const ASSETS = {
   '/assets/theme.css': ['theme.css', 'text/css; charset=utf-8'],
   '/assets/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
+  '/assets/live.js': ['live.js', 'text/javascript; charset=utf-8'],
 };
 
 function send(res, status, body, type = 'application/json; charset=utf-8') {
@@ -77,14 +80,24 @@ function fail(res, err) {
   send(res, err.status || 502, { error: err.message || String(err) });
 }
 
-function createApp({ fmHome, cacheMs = 3000, runner, prChecks } = {}) {
+// refreshMs: how often the background refresher recomputes the fleet snapshot
+// and both payloads (only once start() is called; bin/harness.js does).
+function createApp({ fmHome, refreshMs = 5000, runner, prChecks } = {}) {
   const ports = { queue: null, board: null }; // filled in by the caller once listening
-  const fm = new Firstmate(fmHome, { cacheMs, runner });
+  const fm = new Firstmate(fmHome, { runner });
   const desk = new AnswerDesk(fm);
   const checks = prChecks || new PrChecks();
-  const currentQueue = async () => {
+  // One run = one snapshot plus everything derived from it (per-task git reads,
+  // PR check lookups), so requests never pay for any of it.
+  const refresher = new Refresher(async () => {
     const snap = await fm.snapshot();
-    return { generated: snap.generated, items: buildQueue(snap, (f) => fm.mtime(f)) };
+    const items = buildQueue(snap, (f) => fm.mtime(f));
+    const board = await buildBoard(snap, fm, checks);
+    return { queue: { generated: snap.generated, items }, board };
+  }, { intervalMs: refreshMs });
+  const current = async () => {
+    const { value, meta } = await refresher.get();
+    return { ...value, meta };
   };
 
   const queueHandler = async (req, res) => {
@@ -93,14 +106,15 @@ function createApp({ fmHome, cacheMs = 3000, runner, prChecks } = {}) {
       if (req.method === 'GET' && url.pathname === '/') return sendPage(res, 'queue.html');
       if (common(req, res, url, ports)) return undefined;
       if (req.method === 'GET' && url.pathname === '/api/queue') {
-        const q = await currentQueue();
-        return send(res, 200, { generated: q.generated, items: desk.annotate(q.items) });
+        const { queue: q, meta } = await current();
+        return send(res, 200, { generated: q.generated, items: desk.annotate(q.items), fresh: meta });
       }
       if (req.method === 'POST' && url.pathname === '/api/answer') {
         if (!sameOriginJson(req)) return send(res, 403, { error: 'same-origin JSON only' });
         const body = await readJson(req);
-        const q = await currentQueue();
+        const { queue: q } = await current();
         const rec = await desk.submit(q.items, body.id, body.text);
+        refresher.refresh(); // pick up Firstmate's reaction sooner
         return send(res, 200, { ok: true, sent: rec });
       }
       return send(res, 404, { error: 'not found' });
@@ -113,7 +127,8 @@ function createApp({ fmHome, cacheMs = 3000, runner, prChecks } = {}) {
       if (req.method === 'GET' && url.pathname === '/') return sendPage(res, 'board.html');
       if (common(req, res, url, ports)) return undefined;
       if (req.method === 'GET' && url.pathname === '/api/board') {
-        return send(res, 200, await buildBoard(await fm.snapshot(), fm, checks));
+        const { board, meta } = await current();
+        return send(res, 200, { ...board, fresh: meta });
       }
       return send(res, 404, { error: 'not found' });
     } catch (err) { return fail(res, err); }
@@ -123,7 +138,10 @@ function createApp({ fmHome, cacheMs = 3000, runner, prChecks } = {}) {
     fm,
     desk,
     prChecks: checks,
+    refresher,
     ports,
+    start() { refresher.start(); return this; },
+    stop() { refresher.stop(); },
     queueServer: http.createServer(queueHandler),
     boardServer: http.createServer(boardHandler),
   };

@@ -24,33 +24,25 @@ function run(cmd, args, { input, timeout = 30000, env, cwd } = {}) {
 }
 
 class Firstmate {
-  constructor(fmHome, { cacheMs = 3000, runner = run } = {}) {
+  constructor(fmHome, { runner = run } = {}) {
     this.home = fmHome;
-    this.cacheMs = cacheMs;
     this.runner = runner;
-    this._snap = null; // { at, promise }
   }
 
   bin(name) { return path.join(this.home, 'bin', name); }
 
   env() { return { ...process.env, FM_HOME: this.home }; }
 
-  // fm-fleet-snapshot.sh --json (schema fm-fleet-snapshot.v1). Cached briefly so
-  // both pages and several browser tabs share one execution per refresh window.
-  snapshot() {
-    const now = Date.now();
-    if (this._snap && now - this._snap.at < this.cacheMs) return this._snap.promise;
-    const promise = this.runner(this.bin('fm-fleet-snapshot.sh'), ['--json'], { env: this.env(), timeout: 60000 })
-      .then((out) => {
-        const snap = JSON.parse(out);
-        if (snap.schema !== 'fm-fleet-snapshot.v1') {
-          throw new Error(`unexpected snapshot schema: ${snap.schema}`);
-        }
-        return snap;
-      });
-    this._snap = { at: now, promise };
-    promise.catch(() => { if (this._snap && this._snap.promise === promise) this._snap = null; });
-    return promise;
+  // fm-fleet-snapshot.sh --json (schema fm-fleet-snapshot.v1). Uncached: the
+  // server's Refresher (src/refresher.js) runs it on a steady interval and
+  // shares the result between both pages and every browser tab.
+  async snapshot() {
+    const out = await this.runner(this.bin('fm-fleet-snapshot.sh'), ['--json'], { env: this.env(), timeout: 60000 });
+    const snap = JSON.parse(out);
+    if (snap.schema !== 'fm-fleet-snapshot.v1') {
+      throw new Error(`unexpected snapshot schema: ${snap.schema}`);
+    }
+    return snap;
   }
 
   // The `## Captain's intent` section of data/<id>/brief.md: the worker's overall objective.

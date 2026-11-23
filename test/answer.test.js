@@ -44,7 +44,7 @@ test('submitting an answer only invokes fm-inbox.sh note - and marks it sent', a
   const h = makeHome({});
   h.setSnapshot(fixture(h.home));
   const stateBefore = fs.readdirSync(`${h.home}/state`);
-  const app = createApp({ fmHome: h.home, cacheMs: 0 });
+  const app = createApp({ fmHome: h.home });
   const base = await listen(app.queueServer);
   t.after(() => app.queueServer.close());
 
@@ -67,6 +67,7 @@ test('submitting an answer only invokes fm-inbox.sh note - and marks it sent', a
   const snap = fixture(h.home);
   snap.tasks[0].hints.open_decisions = [];
   h.setSnapshot(snap);
+  await app.refresher.refresh();
   const q2 = await (await fetch(`${base}/api/queue`)).json();
   assert.deepEqual(q2.items.map((i) => i.id), ['hold:demo-held']);
   assert.equal(app.desk.sent.size, 0);
@@ -75,7 +76,7 @@ test('submitting an answer only invokes fm-inbox.sh note - and marks it sent', a
 test('answers for unknown items, empty answers, and cross-origin posts are refused without writing', async (t) => {
   const h = makeHome({});
   h.setSnapshot(fixture(h.home));
-  const app = createApp({ fmHome: h.home, cacheMs: 0 });
+  const app = createApp({ fmHome: h.home });
   const base = await listen(app.queueServer);
   t.after(() => app.queueServer.close());
   const post = (body, headers = {}) => fetch(`${base}/api/answer`, {

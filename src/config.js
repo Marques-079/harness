@@ -4,7 +4,8 @@
 //   HARNESS_QUEUE_PORT / --queue-port   question queue page (default 4710).
 //   HARNESS_BOARD_PORT / --board-port   agent board page (default 4711).
 //   HARNESS_HOST / --host          bind address (default 127.0.0.1).
-//   HARNESS_CACHE_MS / --cache-ms  how long one Firstmate snapshot is reused (default 3000).
+//   HARNESS_REFRESH_MS / --refresh-ms  background refresh interval for the fleet
+//                                  snapshot and both payloads (default 5000).
 
 const os = require('node:os');
 const path = require('node:path');
@@ -17,13 +18,19 @@ function parsePort(value, name) {
   return n;
 }
 
+function parseInterval(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 250) throw new Error(`invalid refresh interval (ms, >= 250): ${value}`);
+  return n;
+}
+
 function loadConfig(argv = process.argv.slice(2), env = process.env) {
   const cfg = {
     fmHome: env.FM_HOME || DEFAULT_FM_HOME,
     queuePort: parsePort(env.HARNESS_QUEUE_PORT || 4710, 'queue port'),
     boardPort: parsePort(env.HARNESS_BOARD_PORT || 4711, 'board port'),
     host: env.HARNESS_HOST || '127.0.0.1',
-    cacheMs: Number(env.HARNESS_CACHE_MS || 3000),
+    refreshMs: parseInterval(env.HARNESS_REFRESH_MS || 5000),
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split('=', 2);
@@ -33,7 +40,7 @@ function loadConfig(argv = process.argv.slice(2), env = process.env) {
       case '--queue-port': cfg.queuePort = parsePort(val(), 'queue port'); break;
       case '--board-port': cfg.boardPort = parsePort(val(), 'board port'); break;
       case '--host': cfg.host = val(); break;
-      case '--cache-ms': cfg.cacheMs = Number(val()); break;
+      case '--refresh-ms': cfg.refreshMs = parseInterval(val()); break;
       case '-h': case '--help': cfg.help = true; break;
       default: throw new Error(`unknown argument: ${argv[i]}`);
     }
